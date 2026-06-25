@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+
+    function isValidUser(data) {
+      let isUserIdValid = data.userId == request.auth.uid;
+      let hasNotes = 'notes' in data;
+      let isNotesValid = !hasNotes || (data.notes is string && data.notes.size() <= 100000);
+      let hasCompletedSteps = 'completedSteps' in data;
+      let isCompletedStepsValid = !hasCompletedSteps || data.completedSteps is map;
+      let isUpdatedAtValid = data.updatedAt == request.time;
+      
+      return data.keys().hasAll(['userId', 'updatedAt']) &&
+             data.keys().size() <= 4 &&
+             isUserIdValid && isNotesValid && isCompletedStepsValid && isUpdatedAtValid;
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && request.auth.uid == userId;
+      allow list: if false; 
+      
+      allow create: if isSignedIn() && 
+                    isValidId(userId) && 
+                    request.auth.uid == userId && 
+                    isValidUser(incoming());
+                    
+      allow update: if isSignedIn() && 
+                    isValidId(userId) && 
+                    request.auth.uid == userId && 
+                    isValidUser(incoming()) &&
+                    incoming().userId == existing().userId &&
+                    (
+                      incoming().diff(existing()).affectedKeys().hasOnly(['notes', 'completedSteps', 'updatedAt'])
+                    );
+                    
+      allow delete: if isSignedIn() && request.auth.uid == userId;
+    }
+  }
+}
